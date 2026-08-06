@@ -1,0 +1,11 @@
+[package]
+name = "noctyrn-bake"
+version = "0.1.0"
+edition = "2021"
+description = "Bakes Noctyrn brand SVGs (logo, icon, animated splash) into PNGs for the game"
+
+[dependencies]
+usvg = "0.47"
+resvg = "0.47"
+roxmltree = "0.20"
+image = "0.25"
