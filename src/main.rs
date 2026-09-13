@@ -9,6 +9,9 @@
 
 use std::path::PathBuf;
 
+mod glb_writer;
+mod split;
+
 #[derive(serde::Serialize)]
 struct TriangleMesh {
     vertices: Vec<[f32; 3]>,
@@ -26,13 +29,194 @@ struct ColliderCollection {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 4 || args[1] != "--generate-mesh" {
-        eprintln!("Usage: {} --generate-mesh <path-in> <path-out>", args[0]);
+    if args.len() < 2 {
+        eprintln!("Usage:");
+        eprintln!("  {} --generate-mesh <path-in> <path-out>", args[0]);
+        eprintln!("  {} --split-recipe <gun.glb> <recipe.json>", args[0]);
+        eprintln!("  {} --split-sockets <gun.glb> <recipe.json>", args[0]);
+        eprintln!("  {} --prune-mag <mag.glb> <out.glb> <old-socket: x,y,z>", args[0]);
+        eprintln!("  {} --inspect <glb>", args[0]);
+        eprintln!("  {} --drop-nodes <glb> <out.glb> <substr>...", args[0]);
+        eprintln!("  {} --extract-nodes <glb> <out.glb> <substr>...", args[0]);
+        eprintln!("  {} --translate <glb> <out.glb> <dx,dy,dz>", args[0]);
+        eprintln!("  {} --append-nodes <base.glb> <donor.glb> <out.glb>", args[0]);
+        eprintln!("  {} --tri-report <glb>...", args[0]);
+        eprintln!("  {} --strip-small <glb> <out.glb> <min_tris>", args[0]);
+        eprintln!("  {} --slice <glb> <axis:0,1,2> <lo,hi>", args[0]);
+        eprintln!("  {} --hash-parts <glb>...", args[0]);
+        eprintln!("  {} --split-gun <gun.glb> <recipe.json> <out-dir>", args[0]);
         std::process::exit(1);
     }
 
-    let path_in = PathBuf::from(&args[2]);
-    let path_out = PathBuf::from(&args[3]);
+    let result = match args[1].as_str() {
+        "--generate-mesh" => {
+            if args.len() < 4 {
+                eprintln!("Usage: {} --generate-mesh <path-in> <path-out>", args[0]);
+                std::process::exit(1);
+            }
+            cmd_generate_mesh(&args[2], &args[3])
+        }
+        "--split-recipe" => {
+            if args.len() < 4 {
+                eprintln!("Usage: {} --split-recipe <gun.glb> <recipe.json>", args[0]);
+                std::process::exit(1);
+            }
+            split::cmd_recipe(&args[2], &args[3])
+        }
+        "--split-sockets" => {
+            if args.len() < 4 {
+                eprintln!("Usage: {} --split-sockets <gun.glb> <recipe.json>", args[0]);
+                std::process::exit(1);
+            }
+            split::cmd_sockets(&args[2], &args[3])
+        }
+        "--prune-mag" => {
+            if args.len() < 5 {
+                eprintln!("Usage: {} --prune-mag <mag.glb> <out.glb> <old-socket: x,y,z>", args[0]);
+                std::process::exit(1);
+            }
+            let coords: Vec<f32> = args[4]
+                .split(',')
+                .map(|s| {
+                    s.trim().parse::<f32>().unwrap_or_else(|_| {
+                        eprintln!("Bad socket coordinate: {s}");
+                        std::process::exit(1);
+                    })
+                })
+                .collect();
+            if coords.len() != 3 {
+                eprintln!("Socket needs exactly 3 coordinates: x,y,z");
+                std::process::exit(1);
+            }
+            match split::cmd_prune_mag(&args[2], &args[3], [coords[0], coords[1], coords[2]], args.get(5).map(|s| s.as_str())) {
+                Ok(new_socket) => {
+                    println!(
+                        "{}",
+                        serde_json::json!({"position": new_socket})
+                    );
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
+        }
+        "--split-gun" => {
+            if args.len() < 5 {
+                eprintln!("Usage: {} --split-gun <gun.glb> <recipe.json> <out-dir>", args[0]);
+                std::process::exit(1);
+            }
+            split::cmd_split(&args[2], &args[3], &args[4])
+        }
+        "--inspect" => {
+            if args.len() < 3 {
+                eprintln!("Usage: {} --inspect <glb>", args[0]);
+                std::process::exit(1);
+            }
+            split::cmd_inspect(&args[2])
+        }
+        "--drop-nodes" => {
+            if args.len() < 5 {
+                eprintln!("Usage: {} --drop-nodes <glb> <out.glb> <substr>...", args[0]);
+                std::process::exit(1);
+            }
+            split::cmd_drop_nodes(&args[2], &args[3], &args[4..])
+        }
+        "--extract-nodes" => {
+            if args.len() < 5 {
+                eprintln!("Usage: {} --extract-nodes <glb> <out.glb> <substr>...", args[0]);
+                std::process::exit(1);
+            }
+            split::cmd_extract_nodes(&args[2], &args[3], &args[4..])
+        }
+        "--translate" => {
+            if args.len() < 5 {
+                eprintln!("Usage: {} --translate <glb> <out.glb> <dx,dy,dz>", args[0]);
+                std::process::exit(1);
+            }
+            let coords: Vec<f32> = args[4]
+                .split(',')
+                .map(|s| {
+                    s.trim().parse::<f32>().unwrap_or_else(|_| {
+                        eprintln!("Bad translate coordinate: {s}");
+                        std::process::exit(1);
+                    })
+                })
+                .collect();
+            if coords.len() != 3 {
+                eprintln!("Translate needs exactly 3 coordinates: dx,dy,dz");
+                std::process::exit(1);
+            }
+            split::cmd_translate(&args[2], &args[3], [coords[0], coords[1], coords[2]])
+        }
+        "--append-nodes" => {
+            if args.len() < 5 {
+                eprintln!("Usage: {} --append-nodes <base.glb> <donor.glb> <out.glb>", args[0]);
+                std::process::exit(1);
+            }
+            split::cmd_append_nodes(&args[2], &args[3], &args[4])
+        }
+        "--tri-report" => {
+            if args.len() < 3 {
+                eprintln!("Usage: {} --tri-report <glb>...", args[0]);
+                std::process::exit(1);
+            }
+            split::cmd_tri_report(&args[2..])
+        }
+        "--strip-small" => {
+            if args.len() < 5 {
+                eprintln!("Usage: {} --strip-small <glb> <out.glb> <min_tris>", args[0]);
+                std::process::exit(1);
+            }
+            let min: usize = args[4].trim().parse().unwrap_or_else(|_| {
+                eprintln!("Bad min_tris: {}", args[4]);
+                std::process::exit(1);
+            });
+            split::cmd_strip_small(&args[2], &args[3], min)
+        }
+        "--slice" => {
+            if args.len() < 5 {
+                eprintln!("Usage: {} --slice <glb> <axis:0,1,2> <lo,hi>", args[0]);
+                std::process::exit(1);
+            }
+            let axis: usize = args[3].trim().parse().unwrap_or_else(|_| {
+                eprintln!("Bad axis: {}", args[3]);
+                std::process::exit(1);
+            });
+            let range: Vec<f32> = args[4]
+                .split(',')
+                .map(|s| {
+                    s.trim().parse::<f32>().unwrap_or_else(|_| {
+                        eprintln!("Bad range coordinate: {s}");
+                        std::process::exit(1);
+                    })
+                })
+                .collect();
+            if range.len() != 2 {
+                eprintln!("Range needs exactly 2 coordinates: lo,hi");
+                std::process::exit(1);
+            }
+            split::cmd_slice(&args[2], axis, range[0], range[1])
+        }
+        "--hash-parts" => {
+            if args.len() < 3 {
+                eprintln!("Usage: {} --hash-parts <glb>...", args[0]);
+                std::process::exit(1);
+            }
+            split::cmd_hash_parts(&args[2..])
+        }
+        other => {
+            eprintln!("Unknown command: {other}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = result {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn cmd_generate_mesh(path_in: &str, path_out: &str) -> Result<(), String> {
+    let path_in = PathBuf::from(path_in);
+    let path_out = PathBuf::from(path_out);
 
     let (document, buffers, _) = gltf::import(&path_in).unwrap_or_else(|e| {
         eprintln!("Failed to load GLB: {e}");
@@ -50,8 +234,9 @@ fn main() {
     eprintln!("Generated {} triangle meshes", colliders.len());
     let collection = ColliderCollection { colliders };
     let json = serde_json::to_string_pretty(&collection).unwrap();
-    std::fs::write(&path_out, &json).unwrap();
+    std::fs::write(&path_out, &json).map_err(|e| e.to_string())?;
     eprintln!("Wrote {}", path_out.display());
+    Ok(())
 }
 
 fn process_node(
@@ -112,7 +297,7 @@ fn process_node(
     }
 }
 
-fn local_matrix(node: &gltf::Node) -> nalgebra::Matrix4<f32> {
+pub(crate) fn local_matrix(node: &gltf::Node) -> nalgebra::Matrix4<f32> {
     let (t, q, s) = node.transform().decomposed();
     trs_matrix(t, q, s)
 }
