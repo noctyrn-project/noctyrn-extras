@@ -2002,6 +2002,121 @@ fn part_output_path(gun_id: &str, part: GunPart) -> String {
     }
 }
 
+/// `--split-prims <glb> <out-dir> [names...]`: explode every primitive of
+/// every mesh into its own single-node GLB. Unlike `--split-gun` (which
+/// groups by node/mesh), this splits *within* a mesh — for models whose
+/// "parts" are material islands sharing one mesh (a crate whose body, lid
+/// and latches are three primitives of one `Plane`). Prints per-part bounds
+/// so parts can be identified, and uses the optional `names` in order.
+pub fn cmd_split_prims(in_path: &str, out_dir: &str, names: &[String]) -> Result<(), String> {
+    let (source_materials, nodes) = read_baked_nodes(in_path)?;
+    let out = PathBuf::from(out_dir);
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+
+    struct Part {
+        name: String,
+        material: OutMaterial,
+        prim: PartPrimitive,
+        bounds: Bounds,
+    }
+
+    let mut parts: Vec<Part> = Vec::new();
+    let mut auto_idx = 0usize;
+    for node in &nodes {
+        let multi = node.primitives.len() > 1;
+        for (i, prim) in node.primitives.iter().enumerate() {
+            let name = if let Some(explicit) = names.get(parts.len()) {
+                sanitize_part_name(explicit)
+            } else if multi {
+                sanitize_part_name(&format!("{}_{}", node.name, i))
+            } else {
+                sanitize_part_name(&node.name)
+            };
+            let mut bounds = Bounds::empty();
+            for p in &prim.positions {
+                bounds.include(*p);
+            }
+            let material = source_materials
+                .get(prim.material)
+                .cloned()
+                .ok_or_else(|| format!("material {} out of range", prim.material))?;
+            parts.push(Part {
+                name,
+                material,
+                prim: PartPrimitive {
+                    positions: prim.positions.clone(),
+                    normals: prim.normals.clone(),
+                    uvs: prim.uvs.clone(),
+                    indices: prim.indices.clone(),
+                    material: 0,
+                },
+                bounds,
+            });
+            auto_idx += 1;
+        }
+    }
+    if parts.is_empty() {
+        return Err(format!("{in_path} has no primitives to split"));
+    }
+    if !names.is_empty() && names.len() != parts.len() {
+        return Err(format!(
+            "got {} names for {} primitives",
+            names.len(),
+            parts.len()
+        ));
+    }
+
+    for (i, part) in parts.iter().enumerate() {
+        let size = part.bounds.extents();
+        eprintln!(
+            "[{i}] {:<20} tris={:<6} size=[{:.3},{:.3},{:.3}] min=[{:.3},{:.3},{:.3}] max=[{:.3},{:.3},{:.3}] mat={}",
+            part.name,
+            part.prim.indices.len() / 3,
+            size[0],
+            size[1],
+            size[2],
+            part.bounds.min[0],
+            part.bounds.min[1],
+            part.bounds.min[2],
+            part.bounds.max[0],
+            part.bounds.max[1],
+            part.bounds.max[2],
+            part.material.name.as_deref().unwrap_or("(unnamed)"),
+        );
+    }
+
+    for part in &parts {
+        let node = PartNode {
+            name: part.name.clone(),
+            primitives: vec![part.prim.clone()],
+        };
+        let bytes = glb_writer::write_glb(&[node], &[part.material.clone()])?;
+        let dest = out.join(format!("{}.glb", part.name));
+        std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+        eprintln!("Wrote {}", dest.display());
+    }
+    let _ = auto_idx;
+    Ok(())
+}
+
+fn sanitize_part_name(name: &str) -> String {
+    let mut out: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+    out.trim_matches('_').to_string()
+}
+
 /// Minimal draft attachment JSON: identity modifiers, mesh path filled in,
 /// barrel provides the muzzle socket. Display name derived from the group
 /// names; artist defaults to D_U (all current models).

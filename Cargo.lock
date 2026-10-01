@@ -229,6 +229,7 @@ dependencies = [
  "gltf",
  "gltf-json",
  "nalgebra",
+ "png",
  "serde",
  "serde_json",
 ]

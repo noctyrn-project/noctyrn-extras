@@ -14,6 +14,7 @@ use gltf_json::validation::Checked;
 use gltf_json::{accessor, buffer, material, mesh, scene, Index, Root};
 
 /// One triangle-list primitive with baked world-space vertices.
+#[derive(Clone, Debug)]
 pub struct PartPrimitive {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
@@ -30,6 +31,7 @@ pub struct PartNode {
 }
 
 /// Flat PBR material (Sketchfab gun parts are untextured).
+#[derive(Clone, Debug)]
 pub struct OutMaterial {
     pub name: Option<String>,
     pub base_color: [f32; 4],

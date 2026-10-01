@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 mod glb_writer;
 mod split;
+mod texture;
 
 #[derive(serde::Serialize)]
 struct TriangleMesh {
@@ -45,6 +46,8 @@ fn main() {
         eprintln!("  {} --slice <glb> <axis:0,1,2> <lo,hi>", args[0]);
         eprintln!("  {} --hash-parts <glb>...", args[0]);
         eprintln!("  {} --split-gun <gun.glb> <recipe.json> <out-dir>", args[0]);
+        eprintln!("  {} --split-prims <glb> <out-dir> [name0,name1,...]", args[0]);
+        eprintln!("  {} --gen-pattern <motif> <out.png> [size]", args[0]);
         std::process::exit(1);
     }
 
@@ -195,6 +198,25 @@ fn main() {
                 std::process::exit(1);
             }
             split::cmd_slice(&args[2], axis, range[0], range[1])
+        }
+        "--split-prims" => {
+            if args.len() < 4 {
+                eprintln!("Usage: {} --split-prims <glb> <out-dir> [name0,name1,...]", args[0]);
+                std::process::exit(1);
+            }
+            let names: Vec<String> = args
+                .get(4)
+                .map(|s| s.split(',').map(|n| n.trim().to_string()).collect())
+                .unwrap_or_default();
+            split::cmd_split_prims(&args[2], &args[3], &names)
+        }
+        "--gen-pattern" => {
+            if args.len() < 4 {
+                eprintln!("Usage: {} --gen-pattern <motif> <out.png> [size]", args[0]);
+                std::process::exit(1);
+            }
+            let size: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(2048);
+            texture::cmd_gen_pattern(&args[2], &args[3], size)
         }
         "--hash-parts" => {
             if args.len() < 3 {
